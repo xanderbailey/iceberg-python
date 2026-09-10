@@ -259,6 +259,9 @@ class Snapshot(IcebergBaseModel):
     added_rows: int | None = Field(
         alias="added-rows", default=None, description="The upper bound of the number of rows with assigned row IDs"
     )
+    key_id: str | None = Field(
+        alias="key-id", default=None, description="ID of the encryption key that wraps this snapshot's manifest-list DEK"
+    )
 
     def __str__(self) -> str:
         """Return the string representation of the Snapshot class."""

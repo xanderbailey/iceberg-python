@@ -16,6 +16,7 @@
 # under the License.
 from __future__ import annotations
 
+import base64
 import datetime
 import uuid
 from collections.abc import Iterable
@@ -123,6 +124,33 @@ def construct_refs(table_metadata: TableMetadata) -> TableMetadata:
                 snapshot_id=table_metadata.current_snapshot_id, snapshot_ref_type=SnapshotRefType.BRANCH
             )
     return table_metadata
+
+
+class EncryptedKey(IcebergBaseModel):
+    """A key used for table encryption, stored in v3 metadata under `encryption-keys`.
+
+    The `encrypted-key-metadata` is base64-encoded in JSON, matching Java and Rust.
+    """
+
+    key_id: str = Field(alias="key-id")
+    """Unique identifier for the key."""
+
+    encrypted_key_metadata: bytes = Field(alias="encrypted-key-metadata")
+    """The wrapped (encrypted) key metadata bytes."""
+
+    encrypted_by_id: str | None = Field(alias="encrypted-by-id", default=None)
+    """Identifier of the entity (master key or KEK) that wrapped this key."""
+
+    properties: dict[str, str] = Field(default_factory=dict)
+    """Additional properties associated with the key, e.g. the KEK timestamp."""
+
+    @field_validator("encrypted_key_metadata", mode="before")
+    def _decode_key_metadata(cls, value: Any) -> bytes:
+        return base64.b64decode(value) if isinstance(value, str) else value
+
+    @field_serializer("encrypted_key_metadata")
+    def _encode_key_metadata(self, value: bytes) -> str:
+        return base64.b64encode(value).decode("utf-8")
 
 
 class TableMetadataCommonFields(IcebergBaseModel):
@@ -583,6 +611,9 @@ class TableMetadataV3(TableMetadataCommonFields, IcebergBaseModel):
 
     next_row_id: int | None = Field(alias="next-row-id", default=None)
     """A long higher than all assigned row IDs; the next snapshot's `first-row-id`."""
+
+    encryption_keys: list[EncryptedKey] = Field(alias="encryption-keys", default_factory=list)
+    """A list of encryption keys (KEKs and wrapped manifest-list DEKs) for table encryption."""
 
     def model_dump_json(self, exclude_none: bool = True, exclude: Any | None = None, by_alias: bool = True, **kwargs: Any) -> str:
         raise NotImplementedError("Writing V3 is not yet supported, see: https://github.com/apache/iceberg-python/issues/1551")

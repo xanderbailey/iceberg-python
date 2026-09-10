@@ -3,6 +3,20 @@
 Status: **proposal / design** · Target: PyIceberg (pure-Python)
 References: `apache/iceberg` (Java, canonical) and `iceberg-rust` (sibling, already implemented)
 
+> **Draft implementation note.** A first end-to-end draft of this plan now lives
+> in `pyiceberg/encryption/` (crypto core, KMS, envelope manager, AGS1 file
+> wrappers), the v3 spec models (`EncryptedKey`, `encryption-keys`, snapshot
+> `key-id`, property constants), and the PyArrow data-file decryption hook, with
+> unit tests in `tests/encryption/`. Phase 0's open question is **resolved**:
+> PyArrow's dataset API decrypts per-fragment via
+> `create_decryption_properties(footer_key, aad_prefix)` +
+> `ParquetFragmentScanOptions(decryption_properties=...)`. What remains is the
+> commit-path plumbing (attach an `EncryptionManager` to the table, auto-wrap the
+> manifest list at commit and decrypt it by `snapshot.key-id` on read), which is
+> gated on **v3 metadata write** — currently unsupported
+> (`TableMetadataV3.model_dump_json` raises). Cross-engine golden-vector tests
+> against Java/Rust output are the recommended next test addition.
+
 This plan maps the Iceberg encryption spec — already implemented in Java and
 Rust — onto PyIceberg's architecture. It is written to be built incrementally:
 each phase is independently reviewable and lands as its own PR, per

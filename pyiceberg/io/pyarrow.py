@@ -1116,6 +1116,31 @@ def _expression_to_complementary_pyarrow(expr: BooleanExpression, schema: Schema
 
 
 @lru_cache
+def _build_decryption_scan_options(
+    key_metadata: bytes | None, pre_buffer: bool = True, buffer_size: int = ONE_MEGABYTE
+) -> ds.ParquetFragmentScanOptions | None:
+    """Build Parquet fragment scan options that decrypt a file from its Iceberg key metadata.
+
+    Returns None when the file is not encrypted. The DEK and AAD prefix are read
+    from the StandardKeyMetadata blob and handed to PyArrow's low-level decryption.
+    """
+    if key_metadata is None:
+        return None
+
+    from pyarrow.parquet.encryption import create_decryption_properties
+
+    from pyiceberg.encryption.key_metadata import StandardKeyMetadata
+
+    parsed = StandardKeyMetadata.decode(key_metadata)
+    decryption_properties = create_decryption_properties(
+        footer_key=parsed.encryption_key,
+        aad_prefix=parsed.aad_prefix or b"",
+    )
+    return ds.ParquetFragmentScanOptions(
+        decryption_properties=decryption_properties, pre_buffer=pre_buffer, buffer_size=buffer_size
+    )
+
+
 def _get_file_format(file_format: FileFormat, **kwargs: dict[str, Any]) -> ds.FileFormat:
     if file_format == FileFormat.PARQUET:
         return ds.ParquetFileFormat(**kwargs)
@@ -1644,7 +1669,20 @@ def _task_to_record_batches(
     format_kwargs: dict[str, Any] = {"pre_buffer": True, "buffer_size": ONE_MEGABYTE * 8}
     if dictionary_columns and task.file.file_format == FileFormat.PARQUET:
         format_kwargs["dictionary_columns"] = dictionary_columns
-    arrow_format = _get_file_format(task.file.file_format, **format_kwargs)
+    if task.file.file_format == FileFormat.PARQUET and (
+        decryption_scan_options := _build_decryption_scan_options(
+            task.file.key_metadata, pre_buffer=True, buffer_size=ONE_MEGABYTE * 8
+        )
+    ):
+        # Encrypted data file: decrypt transparently via Parquet modular encryption.
+        # pre_buffer/buffer_size are carried on the scan options; other format kwargs
+        # (e.g. dictionary_columns) still belong on the ParquetFileFormat.
+        format_only_kwargs = {k: v for k, v in format_kwargs.items() if k not in ("pre_buffer", "buffer_size")}
+        arrow_format = ds.ParquetFileFormat(
+            default_fragment_scan_options=decryption_scan_options, **format_only_kwargs
+        )
+    else:
+        arrow_format = _get_file_format(task.file.file_format, **format_kwargs)
     with io.new_input(task.file.file_path).open() as fin:
         fragment = arrow_format.make_fragment(fin)
         physical_schema = fragment.physical_schema

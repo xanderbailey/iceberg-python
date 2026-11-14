@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from pyiceberg.encryption.io import EncryptedInputFile
+from pyiceberg.encryption.io import EncryptedInputFile, EncryptedOutputFile
 from pyiceberg.encryption.key_metadata import StandardKeyMetadata
 from pyiceberg.encryption.stream import (
     _BLOCK_OVERHEAD,
@@ -234,3 +234,24 @@ def test_encrypted_input_file_rejects_a_truncated_file(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="key metadata expects"):
         input_file.open()
+
+
+def test_encrypted_output_file(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.avro"
+    output_file = EncryptedOutputFile(PyArrowFileIO().new_output(str(path)), KEY_METADATA)
+
+    with pytest.raises(ValueError, match="Cannot get key metadata before the file is written"):
+        _ = output_file.key_metadata
+
+    with output_file.create() as stream:
+        stream.write(b"manifest contents")
+
+    encrypted = path.read_bytes()
+    assert encrypted[:4] == b"AGS1"
+    assert output_file.key_metadata == replace(KEY_METADATA, file_length=len(encrypted))
+    assert len(output_file) == len(encrypted)
+    with output_file.to_input_file().open() as stream:
+        assert stream.read() == b"manifest contents"
+
+    with pytest.raises(FileExistsError):
+        output_file.create()
